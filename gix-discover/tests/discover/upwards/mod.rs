@@ -235,6 +235,118 @@ fn from_existing_worktree() -> crate::Result {
     Ok(())
 }
 
+#[test]
+fn from_existing_worktree_with_relative_linking_files() -> crate::Result {
+    let tmp = gix_testtools::tempfile::TempDir::new()?;
+    let main = tmp.path().join("main");
+    let linked = tmp.path().join("linked");
+    run_git(tmp.path(), &["init", "main"])?;
+    run_git(
+        &main,
+        &[
+            "-c",
+            "user.name=Gitoxide",
+            "-c",
+            "user.email=gitoxide@example.com",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "init",
+        ],
+    )?;
+    run_git(&main, &["worktree", "add", "--detach", "../linked", "HEAD"])?;
+
+    let private_git_dir = main.join(".git/worktrees/linked");
+    make_worktree_links_relative(&linked, &private_git_dir)?;
+    assert!(
+        std::fs::read_to_string(linked.join(".git"))?.starts_with("gitdir: ../main/.git/worktrees/linked"),
+        "the linked checkout uses a relative gitdir file"
+    );
+    let backlink = std::fs::read_to_string(private_git_dir.join("gitdir"))?;
+    assert!(
+        std::path::Path::new(backlink.trim()).is_relative() && backlink.trim().ends_with("linked/.git"),
+        "the private git dir points back to the checkout with a relative path"
+    );
+
+    for discover_path in [&linked, &private_git_dir] {
+        let (path, trust) = gix_discover::upwards(discover_path)?;
+        assert_eq!(trust, expected_trust());
+        let (actual_git_dir, actual_worktree) = path.into_repository_and_work_tree_directories();
+        assert_eq!(
+            gix_path::realpath(&actual_git_dir)?,
+            gix_path::realpath(&private_git_dir)?,
+            "discovery resolves the private git dir from relative worktree metadata"
+        );
+        assert_eq!(
+            actual_worktree.as_deref().map(gix_path::realpath).transpose()?,
+            Some(gix_path::realpath(&linked)?),
+            "discovery resolves the linked worktree from relative worktree metadata"
+        );
+    }
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn from_symlinked_worktree_with_relative_linking_files() -> crate::Result {
+    let tmp = gix_testtools::tempfile::TempDir::new()?;
+    let main = tmp.path().join("actual/main");
+    let linked = tmp.path().join("actual/linked");
+    let linked_symlink = tmp.path().join("linked-symlink");
+    std::fs::create_dir(tmp.path().join("actual"))?;
+    run_git(&tmp.path().join("actual"), &["init", "main"])?;
+    run_git(
+        &main,
+        &[
+            "-c",
+            "user.name=Gitoxide",
+            "-c",
+            "user.email=gitoxide@example.com",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "init",
+        ],
+    )?;
+    run_git(&main, &["worktree", "add", "--detach", "../linked", "HEAD"])?;
+    make_worktree_links_relative(&linked, &main.join(".git/worktrees/linked"))?;
+    std::os::unix::fs::symlink(&linked, &linked_symlink)?;
+
+    let (path, trust) = gix_discover::upwards(&linked_symlink)?;
+    assert_eq!(trust, expected_trust());
+    let (actual_git_dir, actual_worktree) = path.into_repository_and_work_tree_directories();
+    assert_eq!(
+        gix_path::realpath(&actual_git_dir)?,
+        gix_path::realpath(main.join(".git/worktrees/linked"))?,
+        "the private git dir is found through a relative gitdir file reached via a symlinked checkout"
+    );
+    assert_eq!(
+        actual_worktree.as_deref(),
+        Some(linked_symlink.as_path()),
+        "the discovered worktree remains the user-provided symlinked checkout"
+    );
+
+    Ok(())
+}
+
+fn make_worktree_links_relative(linked: &std::path::Path, private_git_dir: &std::path::Path) -> crate::Result {
+    std::fs::write(linked.join(".git"), "gitdir: ../main/.git/worktrees/linked\n")?;
+    std::fs::write(private_git_dir.join("gitdir"), "../../../../linked/.git\n")?;
+    Ok(())
+}
+
+fn run_git(working_dir: &std::path::Path, args: &[&str]) -> crate::Result {
+    let status = gix_testtools::run_git(working_dir, args)?;
+    assert!(
+        status.success(),
+        "git {} in '{}' succeeds",
+        args.join(" "),
+        working_dir.display()
+    );
+    Ok(())
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn cross_fs() -> crate::Result {

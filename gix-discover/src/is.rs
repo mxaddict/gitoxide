@@ -3,6 +3,10 @@ use std::{borrow::Cow, ffi::OsStr, path::Path};
 use crate::DOT_GIT_DIR;
 use crate::path::RepositoryKind;
 
+fn realpath_with_cwd(path: std::path::PathBuf, cwd: &Path) -> std::path::PathBuf {
+    gix_path::realpath_opts(&path, cwd, gix_path::realpath::MAX_SYMLINKS).unwrap_or(path)
+}
+
 /// Returns true if the given `git_dir` seems to be a bare repository.
 ///
 /// Please note that repositories without an index generally _look_ bare, even though they might also be uninitialized.
@@ -106,9 +110,14 @@ pub(crate) fn git_with_metadata(
         let worktree_and_common_dir = crate::path::from_plain_file(&common_dir)
             .and_then(Result::ok)
             .and_then(|cd| {
-                crate::path::from_plain_file(&dot_git.join("gitdir"))
+                crate::path::from_plain_file_relative_to_file(&dot_git.join("gitdir"))
                     .and_then(Result::ok)
-                    .map(|worktree_gitfile| (crate::path::without_dot_git_dir(worktree_gitfile), cd))
+                    .map(|worktree_gitfile| {
+                        (
+                            realpath_with_cwd(crate::path::without_dot_git_dir(worktree_gitfile), cwd),
+                            cd,
+                        )
+                    })
             });
         match worktree_and_common_dir {
             Some((work_dir, common_dir)) => {

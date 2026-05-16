@@ -47,14 +47,15 @@ impl Proxy<'_> {
     /// Note that the location might not exist.
     pub fn base(&self) -> std::io::Result<PathBuf> {
         let git_dir = self.git_dir.join("gitdir");
-        let base_dot_git = gix_discover::path::from_plain_file(&git_dir).ok_or_else(|| {
+        let base_dot_git = gix_discover::path::from_plain_file_relative_to_file(&git_dir).ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 format!("Required file '{}' does not exist", git_dir.display()),
             )
         })??;
 
-        Ok(gix_discover::path::without_dot_git_dir(base_dot_git))
+        let base = gix_discover::path::without_dot_git_dir(base_dot_git);
+        Ok(gix_path::realpath_opts(&base, self.parent.current_dir(), gix_path::realpath::MAX_SYMLINKS).unwrap_or(base))
     }
 
     /// The git directory for the work tree, typically contained within the parent git dir.

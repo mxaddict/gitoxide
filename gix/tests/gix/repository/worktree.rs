@@ -262,6 +262,111 @@ fn from_nonbare_parent_repo() {
 }
 
 #[test]
+fn linked_worktree_proxy_base_with_relative_linking_files() -> crate::Result {
+    let tmp = gix_testtools::tempfile::TempDir::new()?;
+    let main = tmp.path().join("main");
+    let linked = tmp.path().join("linked");
+    run_git(tmp.path(), &["init", "main"])?;
+    run_git(
+        &main,
+        &[
+            "-c",
+            "user.name=Gitoxide",
+            "-c",
+            "user.email=gitoxide@example.com",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "init",
+        ],
+    )?;
+    run_git(&main, &["worktree", "add", "--detach", "../linked", "HEAD"])?;
+
+    let private_git_dir = main.join(".git/worktrees/linked");
+    make_worktree_links_relative(&linked, &private_git_dir)?;
+    let repo = gix::open(&main)?;
+    let worktrees = repo.worktrees()?;
+    assert_eq!(worktrees.len(), 1, "the relative-path fixture has one linked worktree");
+    let proxy = worktrees.into_iter().next().expect("one worktree");
+
+    assert_eq!(
+        gix_path::realpath(proxy.base()?)?,
+        gix_path::realpath(&linked)?,
+        "proxy bases resolve relative worktrees/<id>/gitdir paths against the private git dir"
+    );
+    let linked_repo = proxy.into_repo()?;
+    assert_eq!(
+        linked_repo.workdir().map(gix_path::realpath).transpose()?,
+        Some(gix_path::realpath(&linked)?)
+    );
+    assert_eq!(linked_repo.git_dir(), private_git_dir);
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn linked_worktree_proxy_base_with_symlinked_main_repo() -> crate::Result {
+    let tmp = gix_testtools::tempfile::TempDir::new()?;
+    let main = tmp.path().join("actual/main");
+    let linked = tmp.path().join("actual/linked");
+    let main_symlink = tmp.path().join("main-symlink");
+    std::fs::create_dir(tmp.path().join("actual"))?;
+    run_git(&tmp.path().join("actual"), &["init", "main"])?;
+    run_git(
+        &main,
+        &[
+            "-c",
+            "user.name=Gitoxide",
+            "-c",
+            "user.email=gitoxide@example.com",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "init",
+        ],
+    )?;
+    run_git(&main, &["worktree", "add", "--detach", "../linked", "HEAD"])?;
+    make_worktree_links_relative(&linked, &main.join(".git/worktrees/linked"))?;
+    std::os::unix::fs::symlink(&main, &main_symlink)?;
+
+    let repo = gix::open(&main_symlink)?;
+    let worktrees = repo.worktrees()?;
+    assert_eq!(worktrees.len(), 1, "the relative-path fixture has one linked worktree");
+    let proxy = worktrees.into_iter().next().expect("one worktree");
+
+    assert_eq!(
+        gix_path::realpath(proxy.base()?)?,
+        gix_path::realpath(&linked)?,
+        "proxy bases preserve symlink semantics when resolving relative worktrees/<id>/gitdir paths"
+    );
+    let repo = proxy.into_repo()?;
+    assert_eq!(
+        repo.workdir().map(gix_path::realpath).transpose()?,
+        Some(gix_path::realpath(&linked)?)
+    );
+
+    Ok(())
+}
+
+fn make_worktree_links_relative(linked: &std::path::Path, private_git_dir: &std::path::Path) -> crate::Result {
+    std::fs::write(linked.join(".git"), "gitdir: ../main/.git/worktrees/linked\n")?;
+    std::fs::write(private_git_dir.join("gitdir"), "../../../../linked/.git\n")?;
+    Ok(())
+}
+
+fn run_git(working_dir: &std::path::Path, args: &[&str]) -> crate::Result {
+    let status = gix_testtools::run_git(working_dir, args)?;
+    assert!(
+        status.success(),
+        "git {} in '{}' succeeds",
+        args.join(" "),
+        working_dir.display()
+    );
+    Ok(())
+}
+
+#[test]
 fn from_nonbare_parent_repo_set_workdir() -> gix_testtools::Result {
     if gix_testtools::should_skip_as_git_version_is_smaller_than(2, 31, 0) {
         return Ok(());

@@ -85,6 +85,17 @@ pub fn from_plain_file(path: &std::path::Path) -> Option<std::io::Result<PathBuf
     Some(Ok(gix_path::from_bstring(buf)))
 }
 
+/// Reads a plain path from a file like [`from_plain_file()`], resolving relative paths against
+/// the file's containing directory.
+pub fn from_plain_file_relative_to_file(path: &std::path::Path) -> Option<std::io::Result<PathBuf>> {
+    from_plain_file(path).map(|res| {
+        res.map(|plain_path| match (plain_path.is_relative(), path.parent()) {
+            (true, Some(parent)) => parent.join(plain_path),
+            _ => plain_path,
+        })
+    })
+}
+
 /// Reads typical `gitdir: ` files from disk as used by worktrees and submodules.
 pub fn from_gitdir_file(path: &std::path::Path) -> Result<PathBuf, from_gitdir_file::Error> {
     let buf = read_regular_file_content_with_size_limit(path)?;
